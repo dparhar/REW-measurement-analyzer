@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Speaker Placement Analyzer v2.3</title>
+<style>
+body{font-family:Arial,sans-serif;margin:20px}
+button{padding:10px 16px}
+pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000px;overflow:auto}
+</style></head><body>
+<h1>Speaker Placement Analyzer v2.3</h1>
+<p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
+<button id="runBtn">Run Analysis</button>
+<pre id="out">PAGE LOADED
+</pre>
+<script>
+const CM_PER_MS=34.3;
+const REQUIRED=['FL','C','FR','SL','SR','SUB'];
+const TH={excellent:1,good:3,attention:5};
+const out=document.getElementById('out');
+function log(x=''){out.textContent+=x+'\n';}
+function classify(cm){const a=Math.abs(cm);if(a<TH.excellent)return 'Excellent';if(a<TH.good)return 'Good';if(a<TH.attention)return 'Needs Attention';return 'Investigate';}
+function recommend(cm,a,b){const d=Math.abs(cm);if(d<TH.excellent)return 'No changes needed.';if(d>20)return 'Large discrepancy detected. Investigate placement, DSP, delays, or measurement conditions before moving speakers.';if(cm>0)return `${b} arrives later. Move ${b} about ${d.toFixed(1)} cm closer, or move ${a} farther away.`;return `${a} arrives later. Move ${a} about ${d.toFixed(1)} cm closer, or move ${b} farther away.`;}
+function sideSymmetry(left,right){const ms=(right-left)*1000;const cm=ms*CM_PER_MS;return {ms,cm,status:classify(cm)};}
+async function run(){log('BUTTON CLICKED');try{log('Connecting to REW...');const r=await fetch('http://localhost:4735/measurements');log('HTTP STATUS: '+r.status);const raw=await r.json();const arr=Array.isArray(raw)?raw:Object.values(raw);log('Found '+arr.length+' measurements');const m={};for(const n of REQUIRED){m[n]=arr.find(x=>x.title===n);log((m[n]?'✓ ':'✗ ')+n);}if(REQUIRED.some(n=>!m[n])) return log('Missing required measurements.');
+log('\nDiagnostics complete. Beginning analysis...');
+const p={};REQUIRED.forEach(n=>p[n]=m[n].timeOfIRPeakSeconds);
+const actions=[];
+function section(title,aName,a,bName,b){const ms=(b-a)*1000, cm=ms*CM_PER_MS, st=classify(cm), rec=recommend(cm,aName,bName);log('\n'+title);log('-'.repeat(title.length));log(`${aName}: ${(a*1000).toFixed(3)} ms`);log(`${bName}: ${(b*1000).toFixed(3)} ms`);log(`Difference: ${ms.toFixed(3)} ms (${cm.toFixed(2)} cm)`);log('Status: '+st);log('Recommendation: '+rec); if(rec!=='No changes needed.') actions.push(rec); return st;}
+const frontStatus=section('Front Stage','FL',p.FL,'FR',p.FR);
+const centerStatus=section('Center Alignment','Front Midpoint',(p.FL+p.FR)/2,'Center',p.C);
+const surroundStatus=section('Surrounds','SL',p.SL,'SR',p.SR);
+log('\nLeft Side');log('---------');log(`FL to SL offset: ${((p.SL-p.FL)*1000).toFixed(3)} ms`);
+log('\nRight Side');log('----------');log(`FR to SR offset: ${((p.SR-p.FR)*1000).toFixed(3)} ms`);
+const sym=sideSymmetry(p.SL-p.FL,p.SR-p.FR);log('\nSide Symmetry');log('-------------');log(`Difference between left/right side offsets: ${sym.ms.toFixed(3)} ms (${sym.cm.toFixed(2)} cm)`);log('Status: '+sym.status);
+log('\nSubwoofer');log('----------');log(`SUB arrival: ${(p.SUB*1000).toFixed(3)} ms`);log('Status: Informational');
+log('\nSYSTEM SUMMARY');log('==============');log(`Front Stage: ${frontStatus}`);log(`Center: ${centerStatus}`);log(`Surrounds: ${surroundStatus}`);log('Subwoofer: Informational');log('\nRecommended actions:');if(actions.length===0){log('1. No changes required.');} else {actions.forEach((a,i)=>log(`${i+1}. ${a}`));}
+log('\nAnalysis complete.');}catch(e){log('ERROR: '+e);}}
+document.getElementById('runBtn').addEventListener('click',run);
+</script></body></html>
