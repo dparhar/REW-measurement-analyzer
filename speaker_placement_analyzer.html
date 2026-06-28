@@ -1,37 +1,318 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Speaker Placement Analyzer</title>
-<style>
-body{font-family:Arial,sans-serif;margin:20px}
-button{padding:10px 16px}
-pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000px;overflow:auto}
-</style></head><body>
-<h1>Speaker Placement Analyzer v2.3</h1>
-<p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
-<button id="runBtn">Run Analysis</button>
-<pre id="out">PAGE LOADED
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Speaker Placement Analyzer v2.4</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{--bg:#f7f8fa;--panel:#fff;--muted:#666;--accent:#0366d6}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:20px;background:var(--bg);color:#111}
+    .container{max-width:900px;margin:0 auto;background:var(--panel);padding:20px;border-radius:8px;box-shadow:0 6px 20px rgba(16,24,40,.08)}
+    h1{margin-top:0;font-size:1.25rem}
+    label{display:block;margin-top:12px;font-size:.9rem;color:var(--muted)}
+    .row{display:flex;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap}
+    input[type="text"], input[type="number"]{padding:8px;border:1px solid #ddd;border-radius:6px;min-width:140px}
+    button{padding:8px 12px;border-radius:6px;border:0;background:var(--accent);color:#fff;cursor:pointer}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    pre{background:#0b0f14;color:#e6eef8;padding:12px;border-radius:6px;white-space:pre-wrap;max-height:420px;overflow:auto;margin-top:14px}
+    .muted{color:var(--muted);font-size:.9rem}
+    .controls{display:flex;gap:8px;align-items:center}
+    .spinner{display:inline-block;width:14px;height:14px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .9s linear infinite;margin-left:8px;vertical-align:middle}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .actions{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+    .warning{color:#b04343}
+    footer{margin-top:18px;font-size:.85rem;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="container" role="main" aria-labelledby="title">
+    <h1 id="title">Speaker Placement Analyzer v2.4</h1>
+    <p class="muted">Required speaker names (case-sensitive by default): <strong>FL, C, FR, SL, SR, SUB</strong>.</p>
+
+    <div>
+      <label for="host">REW API host</label>
+      <div class="row">
+        <input id="host" type="text" value="http://localhost:4735" aria-label="REW API host" />
+        <label for="temp" class="muted" style="margin-left:8px">Air temp (°C)</label>
+        <input id="temp" type="number" value="20" step="0.1" min="-30" max="60" aria-label="Air temperature in Celsius" />
+        <label for="timeout" class="muted" style="margin-left:8px">Timeout (ms)</label>
+        <input id="timeout" type="number" value="5000" step="500" min="1000" aria-label="Request timeout in milliseconds" />
+      </div>
+
+      <div class="actions">
+        <div class="controls">
+          <button id="runBtn">Run Analysis</button>
+          <button id="copyBtn" type="button">Copy</button>
+          <button id="downloadBtn" type="button">Download</button>
+        </div>
+        <div id="status" class="muted" aria-live="polite" style="margin-left:12px"></div>
+      </div>
+
+      <pre id="out" aria-live="polite">PAGE LOADED
 </pre>
-<script>
-const CM_PER_MS=34.3;
-const REQUIRED=['FL','C','FR','SL','SR','SUB'];
-const TH={excellent:1,good:3,attention:5};
-const out=document.getElementById('out');
-function log(x=''){out.textContent+=x+'\n';}
-function classify(cm){const a=Math.abs(cm);if(a<TH.excellent)return 'Excellent';if(a<TH.good)return 'Good';if(a<TH.attention)return 'Needs Attention';return 'Investigate';}
-function recommend(cm,a,b){const d=Math.abs(cm);if(d<TH.excellent)return 'No changes needed.';if(d>20)return 'Large discrepancy detected. Investigate placement, DSP, delays, or measurement conditions before moving speakers.';if(cm>0)return `${b} arrives later. Move ${b} about ${d.toFixed(1)} cm closer, or move ${a} farther away.`;return `${a} arrives later. Move ${a} about ${d.toFixed(1)} cm closer, or move ${b} farther away.`;}
-function sideSymmetry(left,right){const ms=(right-left)*1000;const cm=ms*CM_PER_MS;return {ms,cm,status:classify(cm)};}
-async function run(){log('BUTTON CLICKED');try{log('Connecting to REW...');const r=await fetch('http://localhost:4735/measurements');log('HTTP STATUS: '+r.status);const raw=await r.json();const arr=Array.isArray(raw)?raw:Object.values(raw);log('Found '+arr.length+' measurements');const m={};for(const n of REQUIRED){m[n]=arr.find(x=>x.title===n);log((m[n]?'✓ ':'✗ ')+n);}if(REQUIRED.some(n=>!m[n])) return log('Missing required measurements.');
-log('\nDiagnostics complete. Beginning analysis...');
-const p={};REQUIRED.forEach(n=>p[n]=m[n].timeOfIRPeakSeconds);
-const actions=[];
-function section(title,aName,a,bName,b){const ms=(b-a)*1000, cm=ms*CM_PER_MS, st=classify(cm), rec=recommend(cm,aName,bName);log('\n'+title);log('-'.repeat(title.length));log(`${aName}: ${(a*1000).toFixed(3)} ms`);log(`${bName}: ${(b*1000).toFixed(3)} ms`);log(`Difference: ${ms.toFixed(3)} ms (${cm.toFixed(2)} cm)`);log('Status: '+st);log('Recommendation: '+rec); if(rec!=='No changes needed.') actions.push(rec); return st;}
-const frontStatus=section('Front Stage','FL',p.FL,'FR',p.FR);
-const centerStatus=section('Center Alignment','Front Midpoint',(p.FL+p.FR)/2,'Center',p.C);
-const surroundStatus=section('Surrounds','SL',p.SL,'SR',p.SR);
-log('\nLeft Side');log('---------');log(`FL to SL offset: ${((p.SL-p.FL)*1000).toFixed(3)} ms`);
-log('\nRight Side');log('----------');log(`FR to SR offset: ${((p.SR-p.FR)*1000).toFixed(3)} ms`);
-const sym=sideSymmetry(p.SL-p.FL,p.SR-p.FR);log('\nSide Symmetry');log('-------------');log(`Difference between left/right side offsets: ${sym.ms.toFixed(3)} ms (${sym.cm.toFixed(2)} cm)`);log('Status: '+sym.status);
-log('\nSubwoofer');log('----------');log(`SUB arrival: ${(p.SUB*1000).toFixed(3)} ms`);log('Status: Informational');
-log('\nSYSTEM SUMMARY');log('==============');log(`Front Stage: ${frontStatus}`);log(`Center: ${centerStatus}`);log(`Surrounds: ${surroundStatus}`);log('Subwoofer: Informational');log('\nRecommended actions:');if(actions.length===0){log('1. No changes required.');} else {actions.forEach((a,i)=>log(`${i+1}. ${a}`));}
-log('\nAnalysis complete.');}catch(e){log('ERROR: '+e);}}
-document.getElementById('runBtn').addEventListener('click',run);
-</script></body></html>
+      <div id="errors" role="alert" class="warning" aria-live="assertive"></div>
+      <footer>Notes: Ensure REW's remote server is enabled and CORS (if applicable) allows requests.</footer>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // UI elements
+    const outEl = document.getElementById('out');
+    const statusEl = document.getElementById('status');
+    const errorsEl = document.getElementById('errors');
+    const runBtn = document.getElementById('runBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const hostInput = document.getElementById('host');
+    const tempInput = document.getElementById('temp');
+    const timeoutInput = document.getElementById('timeout');
+
+    const REQUIRED = ['FL','C','FR','SL','SR','SUB'];
+
+    function log(...args) {
+      const s = args.join('');
+      outEl.textContent += s + '\n';
+      outEl.scrollTop = outEl.scrollHeight;
+    }
+    function setStatus(s, busy=false) {
+      statusEl.textContent = s || '';
+      if (busy) {
+        const spinner = document.createElement('span');
+        spinner.className = 'spinner';
+        statusEl.appendChild(spinner);
+      }
+    }
+    function setError(msg) {
+      errorsEl.textContent = msg || '';
+    }
+    function clearOutput() {
+      outEl.textContent = '';
+      setError('');
+    }
+
+    // Compute speed: m/s = 331.3 + 0.606 * T_C  => cm/ms = (m/s)*100/1000 = m/s * 0.1
+    function cmPerMsFromTempC(tempC) {
+      const mps = 331.3 + 0.606 * Number(tempC);
+      return mps * 0.1; // cm per ms
+    }
+
+    function classify(cm, thresholds = {excellent:1, good:3, attention:5}) {
+      const a = Math.abs(cm);
+      if (a < thresholds.excellent) return 'Excellent';
+      if (a < thresholds.good) return 'Good';
+      if (a < thresholds.attention) return 'Needs Attention';
+      return 'Investigate';
+    }
+
+    function recommend(cm, leftName, rightName) {
+      const d = Math.abs(cm);
+      if (d < 1) return 'No changes needed.';
+      if (d < 3) return `Small difference: verify microphone placement and repeat measurement for certainty.`;
+      if (d < 10) return `Moderate difference: check speaker toe-in, distance, delay/DSP settings. Consider moving ${leftName} or ${rightName} by ~${d.toFixed(1)} cm.`;
+      if (d < 30) return `Large discrepancy: measure again and check DSP delays, crossover routing, phase/polarity and boundary reflections. Estimated distance difference: ${d.toFixed(1)} cm.`;
+      return `Very large discrepancy: check measurement data and system routing (possible wrong channel mapping or measurement error).`;
+    }
+
+    // Tolerant extractor of timeOfIRPeakSeconds - supports a few likely shapes.
+    function findTimeValue(obj) {
+      if (obj == null) return null;
+      if (typeof obj.timeOfIRPeakSeconds === 'number') return obj.timeOfIRPeakSeconds;
+      const candidates = ['timeOfIRPeakSeconds','timeOfPeakSeconds','timeSeconds','time_s','time','irPeak','time_ms'];
+      for (const k of candidates) {
+        if (typeof obj[k] === 'number') return obj[k];
+      }
+      if (obj.ir && typeof obj.ir.timeOfPeak === 'number') return obj.ir.timeOfPeak;
+      // if time is present in ms rather than seconds, attempt to detect big numbers (>1e3) and convert
+      if (typeof obj.time === 'number' && obj.time > 1000) return obj.time / 1000;
+      return null;
+    }
+
+    // Normalize measurements into a map name->measurement object
+    function normalizeMeasurements(raw) {
+      let list = [];
+      if (Array.isArray(raw)) list = raw;
+      else if (raw && Array.isArray(raw.measurements)) list = raw.measurements;
+      else if (raw && Array.isArray(raw.results)) list = raw.results;
+      else if (raw && typeof raw === 'object' && Object.values(raw).every(v => typeof v === 'object')) {
+        list = Object.values(raw);
+      } else {
+        throw new Error('Unrecognized measurement payload shape');
+      }
+
+      const map = {};
+      for (const item of list) {
+        const name = item.name || item.channel || item.label || item.speaker || item.id;
+        const time = findTimeValue(item);
+        if (!name) continue;
+        map[String(name)] = Object.assign({}, item, {timeOfIRPeakSeconds: time});
+      }
+      return map;
+    }
+
+    // Convert ms difference to cm using cmPerMs
+    function msToCm(ms, cmPerMs) {
+      return ms * cmPerMs;
+    }
+
+    async function runAnalysis() {
+      clearOutput();
+      setError('');
+      setStatus('Connecting to REW...', true);
+      runBtn.disabled = true;
+
+      const host = (hostInput.value || '').trim();
+      if (!host) {
+        setError('Host is required (e.g. http://localhost:4735)');
+        setStatus('');
+        runBtn.disabled = false;
+        return;
+      }
+
+      const timeoutMs = Math.max(1000, Number(timeoutInput.value) || 5000);
+      const cmPerMs = cmPerMsFromTempC(Number(tempInput.value || 20));
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        log('RUN START');
+        log(`Requesting measurements from ${host}/measurements (timeout ${timeoutMs} ms)`);
+        const resp = await fetch(host.replace(/\/+$/, '') + '/measurements', { signal: controller.signal });
+        log('HTTP STATUS: ' + resp.status);
+        if (!resp.ok) {
+          const text = await resp.text().catch(()=>'<no body>');
+          throw new Error('HTTP error ' + resp.status + ': ' + text);
+        }
+
+        const raw = await resp.json();
+        log('Received JSON payload.');
+        let m;
+        try {
+          m = normalizeMeasurements(raw);
+        } catch (err) {
+          const keys = (raw && typeof raw === 'object') ? Object.keys(raw).slice(0,20) : [];
+          throw new Error('Could not normalize measurement data. Top-level keys: ' + JSON.stringify(keys));
+        }
+
+        // Validate required channels
+        const missing = REQUIRED.filter(r => !(r in m) || typeof m[r].timeOfIRPeakSeconds !== 'number');
+        if (missing.length) {
+          throw new Error('Missing required channels or time fields: ' + missing.join(', ') + '. Available: ' + Object.keys(m).join(', '));
+        }
+
+        // Build p map of times
+        const p = {};
+        REQUIRED.forEach(n => p[n] = m[n].timeOfIRPeakSeconds);
+
+        log('');
+        log('Diagnostics complete. Beginning analysis...');
+        log('Speed of sound used: ' + (cmPerMs * 1000).toFixed(2) + ' cm/s  (' + cmPerMs.toFixed(3) + ' cm/ms)');
+
+        function section(title, aName, a, bName, b) {
+          const ms = (b - a) * 1000;
+          const cm = msToCm(ms, cmPerMs);
+          const st = classify(cm);
+          const rec = recommend(cm, aName, bName);
+          log('');
+          log(title);
+          log('-'.repeat(title.length));
+          log(`${aName}: ${(a*1000).toFixed(3)} ms`);
+          log(`${bName}: ${(b*1000).toFixed(3)} ms`);
+          log(`Difference: ${ms.toFixed(3)} ms (${cm.toFixed(2)} cm)`);
+          log(`Status: ${st}`);
+          log(`Recommendation: ${rec}`);
+          return st;
+        }
+
+        const frontStatus = section('Front Stage', 'FL', p.FL, 'FR', p.FR);
+        const centerStatus = section('Center Alignment', 'Front Midpoint', (p.FL + p.FR) / 2, 'Center', p.C);
+        const surroundStatus = section('Surrounds', 'SL', p.SL, 'SR', p.SR);
+
+        log('');
+        log('Left Side');
+        log('---------');
+        log(`FL to SL offset: ${((p.SL - p.FL) * 1000).toFixed(3)} ms (${msToCm((p.SL-p.FL)*1000, cmPerMs).toFixed(2)} cm)`);
+
+        log('');
+        log('Right Side');
+        log('----------');
+        log(`FR to SR offset: ${((p.SR - p.FR) * 1000).toFixed(3)} ms (${msToCm((p.SR-p.FR)*1000, cmPerMs).toFixed(2)} cm)`);
+
+        const leftOffsetMs = (p.SL - p.FL) * 1000;
+        const rightOffsetMs = (p.SR - p.FR) * 1000;
+        const symDiffMs = rightOffsetMs - leftOffsetMs;
+        const symDiffCm = msToCm(symDiffMs, cmPerMs);
+        log('');
+        log('Side Symmetry');
+        log('-------------');
+        log(`Difference between left/right side offsets: ${symDiffMs.toFixed(3)} ms (${symDiffCm.toFixed(2)} cm)`);
+        log(`Status: ${classify(symDiffCm)}`);
+        log(`Recommendation: ${recommend(symDiffCm, 'left-side', 'right-side')}`);
+
+        log('');
+        log('Subwoofer');
+        log('----------');
+        log(`SUB arrival: ${(p.SUB * 1000).toFixed(3)} ms`);
+        log('Status: Informational (subwoofer timing often depends on crossover/phase).');
+
+        log('');
+        log('SYSTEM SUMMARY');
+        log('==============');
+        log(`Front Stage: ${frontStatus}`);
+        log(`Center: ${centerStatus}`);
+        log(`Surrounds: ${surroundStatus}`);
+        log('Subwoofer: Informational');
+
+        log('');
+        log('Analysis complete.');
+        setStatus('Analysis complete.');
+      } catch (err) {
+        const isAbort = (err && err.name === 'AbortError');
+        const msg = isAbort ? 'Request timed out' : (err && err.message) || String(err);
+        setError('ERROR: ' + msg);
+        setStatus('Error');
+        log('ERROR: ' + msg);
+      } finally {
+        clearTimeout(timeout);
+        runBtn.disabled = false;
+      }
+    }
+
+    runBtn.addEventListener('click', runAnalysis);
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(outEl.textContent);
+        setStatus('Copied to clipboard.');
+        setTimeout(()=>setStatus(''), 2000);
+      } catch (err) {
+        setError('Copy failed: ' + (err && err.message));
+      }
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([outEl.textContent], {type: 'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'speaker-placement-analysis.txt';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    // Accessibility: allow Enter to run when focused on host or temp
+    [hostInput, tempInput, timeoutInput].forEach(el => {
+      el.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') runAnalysis();
+      });
+    });
+
+  })();
+  </script>
+</body>
+</html>
