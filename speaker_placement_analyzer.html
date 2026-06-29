@@ -2,22 +2,28 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer v2.5</title>
+<title>Speaker Placement Analyzer v2.6</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
-button{padding:10px 16px}
+button{padding:10px 16px;margin-right:10px}
+.controls{margin-bottom:20px}
 pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000px;overflow:auto}
 </style>
 </head>
 <body>
-<h1>Speaker Placement Analyzer v2.5</h1>
+<h1>Speaker Placement Analyzer v2.6</h1>
 <p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
-<button id="runBtn">Run Analysis</button>
+<p>Optional: <b>L+R</b> (combined left+right measurement)</p>
+<div class="controls">
+  <button id="runBtn">Run Analysis</button>
+  <button id="clearBtn">Clear Output</button>
+</div>
 <pre id="out">PAGE LOADED
 </pre>
 <script>
 const CM_PER_MS = 34.3;
 const REQUIRED = ['FL','C','FR','SL','SR','SUB'];
+const OPTIONAL = ['L+R'];
 const TH = { excellent:1, good:3, attention:5, critical:20 };
 const out = document.getElementById('out');
 
@@ -70,10 +76,16 @@ async function run(){
       return;
     }
 
+    // Check for optional measurements
+    const hasLPlusR = arr.find(x => x.title === 'L+R');
+    log((hasLPlusR ? '✓ ' : '○ ') + 'L+R (optional)');
+    if(hasLPlusR) m['L+R'] = hasLPlusR;
+
     log('\nDiagnostics complete. Beginning analysis...');
 
     const p = {};
     REQUIRED.forEach(n => p[n] = m[n].timeOfIRPeakSeconds);
+    if(m['L+R']) p['L+R'] = m['L+R'].timeOfIRPeakSeconds;
 
     function section(title,aName,a,bName,b,isCenter=false,extraInfo=''){
       const ms = (b-a)*1000;
@@ -119,6 +131,20 @@ async function run(){
     log(`Difference between left/right side offsets: ${sideDifferenceMs.toFixed(3)} ms (${sideDifferenceCm.toFixed(2)} cm)`);
     log('Status: ' + classify(sideDifferenceCm));
 
+    if(p['L+R']){
+      const lPlusRFrontMidpoint = (p.FL+p.FR)/2;
+      const lPlusRMs = (p['L+R'] - lPlusRFrontMidpoint) * 1000;
+      const lPlusRCm = lPlusRMs * CM_PER_MS;
+      
+      log('\nL+R Measurement');
+      log('---------------');
+      log(`Front Stage Midpoint: ${(lPlusRFrontMidpoint*1000).toFixed(3)} ms`);
+      log(`L+R: ${(p['L+R']*1000).toFixed(3)} ms`);
+      log(`Difference: ${lPlusRMs.toFixed(3)} ms (${lPlusRCm.toFixed(2)} cm)`);
+      log('Status: ' + classify(lPlusRCm));
+      log('Note: L+R should approximate front stage midpoint. Use to verify front stage balance.');
+    }
+
     log('\nSubwoofer');
     log('----------');
     log(`SUB arrival: ${(p.SUB*1000).toFixed(3)} ms`);
@@ -131,6 +157,7 @@ async function run(){
     log(`Center: ${centerResult.st}`);
     log(`Surrounds: ${surroundResult.st}`);
     log(`Side Symmetry: ${classify(sideDifferenceCm)}`);
+    if(p['L+R']) log(`L+R: ${classify(lPlusRCm)}`);
     log('Subwoofer: Informational');
 
     log('\nAnalysis complete.');
@@ -139,7 +166,12 @@ async function run(){
   }
 }
 
+function clear(){
+  out.textContent = 'PAGE LOADED\n';
+}
+
 document.getElementById('runBtn').addEventListener('click', run);
+document.getElementById('clearBtn').addEventListener('click', clear);
 </script>
 </body>
 </html>
