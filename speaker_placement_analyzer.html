@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer v2.6</title>
+<title>Speaker Placement Analyzer v2.7</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
 button{padding:10px 16px;margin-right:10px}
@@ -11,7 +11,7 @@ pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000
 </style>
 </head>
 <body>
-<h1>Speaker Placement Analyzer v2.6</h1>
+<h1>Speaker Placement Analyzer v2.7</h1>
 <p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
 <p>Optional: <b>L+R</b> (combined left+right measurement)</p>
 <div class="controls">
@@ -133,6 +133,46 @@ async function run(){
     log(`FR to SR distance offset: ${frSrMs.toFixed(3)} ms (${frSrCm.toFixed(2)} cm)`);
     log('Status: ' + classify(frSrCm));
 
+    log('\nCenter to Front Distance');
+    log('------------------------');
+    log(`C (Center): ${(p.C*1000).toFixed(3)} ms`);
+    log(`FL (Front Left): ${(p.FL*1000).toFixed(3)} ms`);
+    const cFlMs = (p.C - p.FL) * 1000;
+    const cFlCm = cFlMs * CM_PER_MS;
+    log(`C to FL distance offset: ${cFlMs.toFixed(3)} ms (${cFlCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cFlCm)));
+
+    log(`FR (Front Right): ${(p.FR*1000).toFixed(3)} ms`);
+    const cFrMs = (p.C - p.FR) * 1000;
+    const cFrCm = cFrMs * CM_PER_MS;
+    log(`C to FR distance offset: ${cFrMs.toFixed(3)} ms (${cFrCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cFrCm)));
+
+    const cFrontSymmetryMs = cFrMs - cFlMs;
+    const cFrontSymmetryCm = cFrontSymmetryMs * CM_PER_MS;
+    log(`C symmetry (FR offset - FL offset): ${cFrontSymmetryMs.toFixed(3)} ms (${cFrontSymmetryCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cFrontSymmetryCm)) + ' - Center should be equidistant from FL and FR');
+
+    log('\nCenter to Surround Distance');
+    log('---------------------------');
+    log(`C (Center): ${(p.C*1000).toFixed(3)} ms`);
+    log(`SL (Surround Left): ${(p.SL*1000).toFixed(3)} ms`);
+    const cSlMs = (p.C - p.SL) * 1000;
+    const cSlCm = cSlMs * CM_PER_MS;
+    log(`C to SL distance offset: ${cSlMs.toFixed(3)} ms (${cSlCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cSlCm)));
+
+    log(`SR (Surround Right): ${(p.SR*1000).toFixed(3)} ms`);
+    const cSrMs = (p.C - p.SR) * 1000;
+    const cSrCm = cSrMs * CM_PER_MS;
+    log(`C to SR distance offset: ${cSrMs.toFixed(3)} ms (${cSrCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cSrCm)));
+
+    const cSurroundSymmetryMs = cSrMs - cSlMs;
+    const cSurroundSymmetryCm = cSurroundSymmetryMs * CM_PER_MS;
+    log(`C symmetry (SR offset - SL offset): ${cSurroundSymmetryMs.toFixed(3)} ms (${cSurroundSymmetryCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(Math.abs(cSurroundSymmetryCm)) + ' - Center should be equidistant from SL and SR');
+
     if(p['L+R']){
       const lPlusRFrontMidpoint = (p.FL+p.FR)/2;
       const lPlusRMs = (p['L+R'] - lPlusRFrontMidpoint) * 1000;
@@ -155,11 +195,13 @@ async function run(){
 
     log('\nSYSTEM SUMMARY');
     log('==============');
-    log(`Front Stage Distance: ${frontResult.st}`);
+    log(`Front Stage Distance (FL-FR): ${frontResult.st}`);
     log(`Center Alignment: ${centerResult.st}`);
-    log(`Surround Stage Distance: ${surroundResult.st}`);
+    log(`Surround Stage Distance (SL-SR): ${surroundResult.st}`);
     log(`Left Channel (FL-SL): ${classify(flSlCm)}`);
     log(`Right Channel (FR-SR): ${classify(frSrCm)}`);
+    log(`Center-Front Symmetry (C to FL/FR): ${classify(Math.abs(cFrontSymmetryCm))}`);
+    log(`Center-Surround Symmetry (C to SL/SR): ${classify(Math.abs(cSurroundSymmetryCm))}`);
     if(p['L+R']) log(`L+R Verification: ${classify(lPlusRCm)}`);
     log('Subwoofer: Informational');
 
