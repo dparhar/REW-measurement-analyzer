@@ -106,30 +106,32 @@ async function run(){
 
     const flFrMs = (p.FR - p.FL) * 1000;
     const flFrCm = flFrMs * CM_PER_MS;
-    const frontResult = section('Front Stage','FL',p.FL,'FR',p.FR);
+    const frontResult = section('Front Stage Distance','FL',p.FL,'FR',p.FR);
 
     const centerFrontMidpoint = (p.FL+p.FR)/2;
     const centerResult = section('Center Alignment','Front Midpoint',centerFrontMidpoint,'Center',p.C,true,Math.abs(flFrCm));
 
-    const surroundResult = section('Surrounds','SL',p.SL,'SR',p.SR);
+    const slSrMs = (p.SR - p.SL) * 1000;
+    const slSrCm = slSrMs * CM_PER_MS;
+    const surroundResult = section('Surround Stage Distance','SL',p.SL,'SR',p.SR);
 
-    const leftOffsetMs = (p.SL - p.FL) * 1000;
-    const rightOffsetMs = (p.SR - p.FR) * 1000;
-    const sideDifferenceMs = rightOffsetMs - leftOffsetMs;
-    const sideDifferenceCm = sideDifferenceMs * CM_PER_MS;
+    log('\nLeft Channel Distance');
+    log('--------------------');
+    log(`FL (Front Left): ${(p.FL*1000).toFixed(3)} ms`);
+    log(`SL (Surround Left): ${(p.SL*1000).toFixed(3)} ms`);
+    const flSlMs = (p.SL - p.FL) * 1000;
+    const flSlCm = flSlMs * CM_PER_MS;
+    log(`FL to SL distance offset: ${flSlMs.toFixed(3)} ms (${flSlCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(flSlCm));
 
-    log('\nLeft Side');
-    log('---------');
-    log(`FL to SL offset: ${leftOffsetMs.toFixed(3)} ms (${(leftOffsetMs*CM_PER_MS).toFixed(2)} cm)`);
-
-    log('\nRight Side');
-    log('----------');
-    log(`FR to SR offset: ${rightOffsetMs.toFixed(3)} ms (${(rightOffsetMs*CM_PER_MS).toFixed(2)} cm)`);
-
-    log('\nSide Symmetry');
-    log('-------------');
-    log(`Difference between left/right side offsets: ${sideDifferenceMs.toFixed(3)} ms (${sideDifferenceCm.toFixed(2)} cm)`);
-    log('Status: ' + classify(sideDifferenceCm));
+    log('\nRight Channel Distance');
+    log('---------------------');
+    log(`FR (Front Right): ${(p.FR*1000).toFixed(3)} ms`);
+    log(`SR (Surround Right): ${(p.SR*1000).toFixed(3)} ms`);
+    const frSrMs = (p.SR - p.FR) * 1000;
+    const frSrCm = frSrMs * CM_PER_MS;
+    log(`FR to SR distance offset: ${frSrMs.toFixed(3)} ms (${frSrCm.toFixed(2)} cm)`);
+    log('Status: ' + classify(frSrCm));
 
     if(p['L+R']){
       const lPlusRFrontMidpoint = (p.FL+p.FR)/2;
@@ -153,11 +155,12 @@ async function run(){
 
     log('\nSYSTEM SUMMARY');
     log('==============');
-    log(`Front Stage: ${frontResult.st}`);
-    log(`Center: ${centerResult.st}`);
-    log(`Surrounds: ${surroundResult.st}`);
-    log(`Side Symmetry: ${classify(sideDifferenceCm)}`);
-    if(p['L+R']) log(`L+R: ${classify(lPlusRCm)}`);
+    log(`Front Stage Distance: ${frontResult.st}`);
+    log(`Center Alignment: ${centerResult.st}`);
+    log(`Surround Stage Distance: ${surroundResult.st}`);
+    log(`Left Channel (FL-SL): ${classify(flSlCm)}`);
+    log(`Right Channel (FR-SR): ${classify(frSrCm)}`);
+    if(p['L+R']) log(`L+R Verification: ${classify(lPlusRCm)}`);
     log('Subwoofer: Informational');
 
     log('\nAnalysis complete.');
