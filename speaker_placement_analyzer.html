@@ -81,7 +81,7 @@ function analyzeIR(irData, sampleRate){
   const maxSearchIdx = Math.min(peakIdx + maxSearchSamples, data.length);
   let firstReflectionIdx = -1;
   let reflectionThreshold = peakVal * 0.05; // 5% of peak
-  for(let i = peakIdx + 100; i < maxSearchIdx; i++){
+  for(let i = peakIdx + 10; i < maxSearchIdx; i++){
     if(Math.abs(data[i]) > reflectionThreshold){
       firstReflectionIdx = i;
       break;
@@ -98,13 +98,15 @@ function analyzeIR(irData, sampleRate){
   }
   decayEnergy = Math.sqrt(decayEnergy);
   
+  const totalPrePost = preEnergy + postEnergy;
+  
   return {
     peakIdx,
     peakVal,
     preEnergy,
     postEnergy,
     crestFactor,
-    prePostRatio: postEnergy > 0 ? postEnergy / (preEnergy + postEnergy) : 0,
+    prePostRatio: totalPrePost > 0 ? postEnergy / totalPrePost : 0,
     firstReflectionIdx,
     firstReflectionTime: firstReflectionIdx >= 0 ? (firstReflectionIdx - peakIdx) / sampleRate * 1000 : -1,
     decayEnergy,
