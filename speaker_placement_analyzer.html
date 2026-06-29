@@ -38,7 +38,7 @@ function classify(cm){
   return 'Critical';
 }
 
-function analyzeIR(irData){
+function analyzeIR(irData, sampleRate){
   if(!irData || irData.length === 0) return null;
   
   // Convert to float array if needed
@@ -77,7 +77,8 @@ function analyzeIR(irData){
   const crestFactor = rms > 0 ? peakVal / rms : 0;
   
   // First reflection (find first significant peak after main peak, within 50ms)
-  const maxSearchIdx = Math.min(peakIdx + 2400, data.length); // ~50ms at 48kHz
+  const maxSearchSamples = Math.floor((sampleRate / 1000) * 50); // 50ms
+  const maxSearchIdx = Math.min(peakIdx + maxSearchSamples, data.length);
   let firstReflectionIdx = -1;
   let reflectionThreshold = peakVal * 0.05; // 5% of peak
   for(let i = peakIdx + 100; i < maxSearchIdx; i++){
@@ -89,7 +90,8 @@ function analyzeIR(irData){
   
   // Energy decay calculation
   const decayStart = peakIdx;
-  const decayEnd = Math.min(decayStart + 4800, data.length); // ~100ms window
+  const decayWindowSamples = Math.floor((sampleRate / 1000) * 100); // 100ms window
+  const decayEnd = Math.min(decayStart + decayWindowSamples, data.length);
   let decayEnergy = 0;
   for(let i = decayStart; i < decayEnd; i++){
     decayEnergy += data[i] * data[i];
@@ -102,9 +104,9 @@ function analyzeIR(irData){
     preEnergy,
     postEnergy,
     crestFactor,
-    prePostRatio: preEnergy > 0 ? postEnergy / preEnergy : 0,
+    prePostRatio: postEnergy > 0 ? postEnergy / (preEnergy + postEnergy) : 0,
     firstReflectionIdx,
-    firstReflectionTime: firstReflectionIdx >= 0 ? (firstReflectionIdx - peakIdx) / 48 : -1, // ms at 48kHz
+    firstReflectionTime: firstReflectionIdx >= 0 ? (firstReflectionIdx - peakIdx) / sampleRate * 1000 : -1,
     decayEnergy,
     dataLength: data.length
   };
@@ -142,11 +144,21 @@ async function run(){
     REQUIRED.forEach(n => p[n] = m[n].timeOfIRPeakSeconds);
     if(m['L+R']) p['L+R'] = m['L+R'].timeOfIRPeakSeconds;
 
+    // Get sample rate from first available measurement
+    let sampleRate = 48000; // default
+    for(const key in m){
+      if(m[key].sampleRate){
+        sampleRate = m[key].sampleRate;
+        log(`Sample Rate: ${sampleRate} Hz`);
+        break;
+      }
+    }
+
     // Analyze IR data
     const irAnalysis = {};
     for(const name of Object.keys(m)){
       if(m[name].irData){
-        irAnalysis[name] = analyzeIR(m[name].irData);
+        irAnalysis[name] = analyzeIR(m[name].irData, sampleRate);
       }
     }
 
@@ -262,7 +274,7 @@ async function run(){
       log(`Peak Value: ${ir.peakVal.toFixed(6)}`);
       log(`Pre-Cursor Energy (before peak): ${ir.preEnergy.toFixed(6)}`);
       log(`Post-Cursor Energy (after peak): ${ir.postEnergy.toFixed(6)}`);
-      log(`Pre/Post Ratio: ${ir.prePostRatio.toFixed(4)}`);
+      log(`Pre/Post Energy Ratio: ${ir.prePostRatio.toFixed(4)}`);
       log(`Crest Factor: ${ir.crestFactor.toFixed(2)}`);
       
       if(ir.firstReflectionIdx >= 0){
@@ -278,25 +290,54 @@ async function run(){
     // DECAY SYMMETRY ANALYSIS
     log('\n\n========== DECAY SYMMETRY ANALYSIS ==========\n');
 
-    const irNames = ['FL', 'FR', 'SL', 'SR'];
-    const validIR = irNames.filter(n => irAnalysis[n]);
+    // Front pair comparison
+    if(irAnalysis['FL'] && irAnalysis['FR']){
+      const ir1 = irAnalysis['FL'];
+      const ir2 = irAnalysis['FR'];
 
-    if(validIR.length === 2){
-      const [name1, name2] = validIR;
-      const ir1 = irAnalysis[name1];
-      const ir2 = irAnalysis[name2];
+      log(`\nFront Pair (FL vs FR) Decay Comparison`);
+      log('-'.repeat(38));
+      log(`FL Post Energy: ${ir1.postEnergy.toFixed(6)}`);
+      log(`FR Post Energy: ${ir2.postEnergy.toFixed(6)}`);
+      
+      const maxPostEnergy = Math.max(ir1.postEnergy, ir2.postEnergy);
+      if(maxPostEnergy > 0){
+        const postEnergyDiff = Math.abs(ir1.postEnergy - ir2.postEnergy) / maxPostEnergy;
+        log(`Energy Difference: ${(postEnergyDiff * 100).toFixed(2)}%`);
+      }
 
-      log(`${name1} vs ${name2} Decay Comparison`);
-      log('-'.repeat(30));
-      log(`${name1} Post Energy: ${ir1.postEnergy.toFixed(6)}`);
-      log(`${name2} Post Energy: ${ir2.postEnergy.toFixed(6)}`);
-      const postEnergyRatio = Math.abs(ir1.postEnergy - ir2.postEnergy) / Math.max(ir1.postEnergy, ir2.postEnergy);
-      log(`Energy Difference: ${(postEnergyRatio * 100).toFixed(2)}%`);
+      log(`FL Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
+      log(`FR Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
+      const maxCrest = Math.max(ir1.crestFactor, ir2.crestFactor);
+      if(maxCrest > 0){
+        const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / maxCrest;
+        log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
+      }
+    }
 
-      log(`${name1} Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
-      log(`${name2} Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
-      const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / Math.max(ir1.crestFactor, ir2.crestFactor);
-      log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
+    // Surround pair comparison
+    if(irAnalysis['SL'] && irAnalysis['SR']){
+      const ir1 = irAnalysis['SL'];
+      const ir2 = irAnalysis['SR'];
+
+      log(`\nSurround Pair (SL vs SR) Decay Comparison`);
+      log('-'.repeat(40));
+      log(`SL Post Energy: ${ir1.postEnergy.toFixed(6)}`);
+      log(`SR Post Energy: ${ir2.postEnergy.toFixed(6)}`);
+      
+      const maxPostEnergy = Math.max(ir1.postEnergy, ir2.postEnergy);
+      if(maxPostEnergy > 0){
+        const postEnergyDiff = Math.abs(ir1.postEnergy - ir2.postEnergy) / maxPostEnergy;
+        log(`Energy Difference: ${(postEnergyDiff * 100).toFixed(2)}%`);
+      }
+
+      log(`SL Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
+      log(`SR Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
+      const maxCrest = Math.max(ir1.crestFactor, ir2.crestFactor);
+      if(maxCrest > 0){
+        const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / maxCrest;
+        log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
+      }
     }
 
     // BOUNDARY REFLECTION ANALYSIS
@@ -318,9 +359,13 @@ async function run(){
         log(`First reflection not detected`);
       }
       
-      log(`Pre-Cursor Energy Ratio: ${(ir.preEnergy / (ir.preEnergy + ir.postEnergy) * 100).toFixed(2)}%`);
-      if(ir.preEnergy / (ir.preEnergy + ir.postEnergy) > 0.1){
-        log(`  ⚠ Significant pre-cursor energy detected`);
+      const prePostTotal = ir.preEnergy + ir.postEnergy;
+      if(prePostTotal > 0){
+        const preCursorPercent = ir.preEnergy / prePostTotal * 100;
+        log(`Pre-Cursor Energy Ratio: ${preCursorPercent.toFixed(2)}%`);
+        if(preCursorPercent > 10){
+          log(`  ⚠ Significant pre-cursor energy detected`);
+        }
       }
     }
 
