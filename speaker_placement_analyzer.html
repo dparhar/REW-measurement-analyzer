@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer v2.7</title>
+<title>Speaker Placement Analyzer v3.0</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
 button{padding:10px 16px;margin-right:10px}
@@ -11,7 +11,7 @@ pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000
 </style>
 </head>
 <body>
-<h1>Speaker Placement Analyzer v2.7</h1>
+<h1>Speaker Placement Analyzer v3.0</h1>
 <p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
 <p>Optional: <b>L+R</b> (combined left+right measurement)</p>
 <div class="controls">
@@ -38,20 +38,76 @@ function classify(cm){
   return 'Critical';
 }
 
-function recommend(cm,aName,bName){
-  const d=Math.abs(cm);
-  if(d<TH.excellent) return `No changes needed (${aName} and ${bName} aligned).`;
-  if(d>=TH.critical) return `Large discrepancy detected (${aName} vs ${bName}): ${d.toFixed(1)} cm difference. Investigate placement, DSP, delays, or measurement conditions.`;
-  if(cm>0) return `${bName} arrives later than ${aName} by ${d.toFixed(1)} cm. Move ${bName} closer or ${aName} farther.`;
-  return `${aName} arrives later than ${bName} by ${d.toFixed(1)} cm. Move ${aName} closer or ${bName} farther.`;
-}
-
-function centerRecommendation(cm,flFrDiff){
-  const d=Math.abs(cm);
-  if(d<1) return `Center aligned perfectly to front stage midpoint.`;
-  if(d<5) return `Center timing offset from front midpoint: ${d.toFixed(1)} cm.`;
-  if(d>=TH.critical) return `Large center offset: ${d.toFixed(1)} cm. Front stage discrepancy is ${flFrDiff.toFixed(1)} cm. Investigate DSP, delays, crossover settings, or measurement conditions.`;
-  return `Center offset from front midpoint: ${d.toFixed(1)} cm. (Front stage discrepancy: ${flFrDiff.toFixed(1)} cm)`;
+function analyzeIR(irData){
+  if(!irData || irData.length === 0) return null;
+  
+  // Convert to float array if needed
+  const data = Array.isArray(irData) ? irData : Object.values(irData);
+  
+  // Find peak
+  let peakIdx = 0, peakVal = 0;
+  for(let i = 0; i < data.length; i++){
+    const abs = Math.abs(data[i]);
+    if(abs > peakVal){
+      peakVal = abs;
+      peakIdx = i;
+    }
+  }
+  
+  // Energy before peak (pre-cursor)
+  let preEnergy = 0;
+  for(let i = 0; i < peakIdx; i++){
+    preEnergy += data[i] * data[i];
+  }
+  preEnergy = Math.sqrt(preEnergy);
+  
+  // Energy after peak (decay)
+  let postEnergy = 0;
+  for(let i = peakIdx + 1; i < data.length; i++){
+    postEnergy += data[i] * data[i];
+  }
+  postEnergy = Math.sqrt(postEnergy);
+  
+  // Crest factor (peak to RMS)
+  let totalEnergy = 0;
+  for(let i = 0; i < data.length; i++){
+    totalEnergy += data[i] * data[i];
+  }
+  const rms = Math.sqrt(totalEnergy / data.length);
+  const crestFactor = rms > 0 ? peakVal / rms : 0;
+  
+  // First reflection (find first significant peak after main peak, within 50ms)
+  const maxSearchIdx = Math.min(peakIdx + 2400, data.length); // ~50ms at 48kHz
+  let firstReflectionIdx = -1;
+  let reflectionThreshold = peakVal * 0.05; // 5% of peak
+  for(let i = peakIdx + 100; i < maxSearchIdx; i++){
+    if(Math.abs(data[i]) > reflectionThreshold){
+      firstReflectionIdx = i;
+      break;
+    }
+  }
+  
+  // Energy decay calculation
+  const decayStart = peakIdx;
+  const decayEnd = Math.min(decayStart + 4800, data.length); // ~100ms window
+  let decayEnergy = 0;
+  for(let i = decayStart; i < decayEnd; i++){
+    decayEnergy += data[i] * data[i];
+  }
+  decayEnergy = Math.sqrt(decayEnergy);
+  
+  return {
+    peakIdx,
+    peakVal,
+    preEnergy,
+    postEnergy,
+    crestFactor,
+    prePostRatio: preEnergy > 0 ? postEnergy / preEnergy : 0,
+    firstReflectionIdx,
+    firstReflectionTime: firstReflectionIdx >= 0 ? (firstReflectionIdx - peakIdx) / 48 : -1, // ms at 48kHz
+    decayEnergy,
+    dataLength: data.length
+  };
 }
 
 async function run(){
@@ -76,7 +132,6 @@ async function run(){
       return;
     }
 
-    // Check for optional measurements
     const hasLPlusR = arr.find(x => x.title === 'L+R');
     log((hasLPlusR ? '✓ ' : '○ ') + 'L+R (optional)');
     if(hasLPlusR) m['L+R'] = hasLPlusR;
@@ -87,11 +142,18 @@ async function run(){
     REQUIRED.forEach(n => p[n] = m[n].timeOfIRPeakSeconds);
     if(m['L+R']) p['L+R'] = m['L+R'].timeOfIRPeakSeconds;
 
+    // Analyze IR data
+    const irAnalysis = {};
+    for(const name of Object.keys(m)){
+      if(m[name].irData){
+        irAnalysis[name] = analyzeIR(m[name].irData);
+      }
+    }
+
     function section(title,aName,a,bName,b,isCenter=false,extraInfo=''){
       const ms = (b-a)*1000;
       const cm = ms*CM_PER_MS;
       const st = classify(cm);
-      const rec = isCenter ? centerRecommendation(cm,extraInfo) : recommend(cm,aName,bName);
 
       log('\n' + title);
       log('-'.repeat(title.length));
@@ -99,17 +161,19 @@ async function run(){
       log(`${bName}: ${(b*1000).toFixed(3)} ms`);
       log(`Difference: ${ms.toFixed(3)} ms (${cm.toFixed(2)} cm)`);
       log('Status: ' + st);
-      log('Recommendation: ' + rec);
 
-      return { st, rec };
+      return { st };
     }
+
+    // TIMING ANALYSIS
+    log('\n\n========== TIMING ANALYSIS ==========\n');
 
     const flFrMs = (p.FR - p.FL) * 1000;
     const flFrCm = flFrMs * CM_PER_MS;
     const frontResult = section('Front Stage Distance','FL',p.FL,'FR',p.FR);
 
     const centerFrontMidpoint = (p.FL+p.FR)/2;
-    const centerResult = section('Center Alignment','Front Midpoint',centerFrontMidpoint,'Center',p.C,true,Math.abs(flFrCm));
+    section('Center Alignment','Front Midpoint',centerFrontMidpoint,'Center',p.C,true,Math.abs(flFrCm));
 
     const slSrMs = (p.SR - p.SL) * 1000;
     const slSrCm = slSrMs * CM_PER_MS;
@@ -151,7 +215,7 @@ async function run(){
     const cFrontSymmetryMs = cFrMs - cFlMs;
     const cFrontSymmetryCm = cFrontSymmetryMs * CM_PER_MS;
     log(`C symmetry (FR offset - FL offset): ${cFrontSymmetryMs.toFixed(3)} ms (${cFrontSymmetryCm.toFixed(2)} cm)`);
-    log('Status: ' + classify(Math.abs(cFrontSymmetryCm)) + ' - Center should be equidistant from FL and FR');
+    log('Status: ' + classify(Math.abs(cFrontSymmetryCm)));
 
     log('\nCenter to Surround Distance');
     log('---------------------------');
@@ -171,7 +235,7 @@ async function run(){
     const cSurroundSymmetryMs = cSrMs - cSlMs;
     const cSurroundSymmetryCm = cSurroundSymmetryMs * CM_PER_MS;
     log(`C symmetry (SR offset - SL offset): ${cSurroundSymmetryMs.toFixed(3)} ms (${cSurroundSymmetryCm.toFixed(2)} cm)`);
-    log('Status: ' + classify(Math.abs(cSurroundSymmetryCm)) + ' - Center should be equidistant from SL and SR');
+    log('Status: ' + classify(Math.abs(cSurroundSymmetryCm)));
 
     if(p['L+R']){
       const lPlusRFrontMidpoint = (p.FL+p.FR)/2;
@@ -184,28 +248,83 @@ async function run(){
       log(`L+R: ${(p['L+R']*1000).toFixed(3)} ms`);
       log(`Difference: ${lPlusRMs.toFixed(3)} ms (${lPlusRCm.toFixed(2)} cm)`);
       log('Status: ' + classify(lPlusRCm));
-      log('Note: L+R should approximate front stage midpoint. Use to verify front stage balance.');
     }
 
-    log('\nSubwoofer');
-    log('----------');
-    log(`SUB arrival: ${(p.SUB*1000).toFixed(3)} ms`);
-    log('Status: Informational');
-    log('Recommendation: Sub timing relative to mains and LFE crossover frequency - future version.');
+    // IMPULSE RESPONSE ANALYSIS
+    log('\n\n========== IMPULSE RESPONSE ANALYSIS ==========\n');
 
-    log('\nSYSTEM SUMMARY');
-    log('==============');
-    log(`Front Stage Distance (FL-FR): ${frontResult.st}`);
-    log(`Center Alignment: ${centerResult.st}`);
-    log(`Surround Stage Distance (SL-SR): ${surroundResult.st}`);
-    log(`Left Channel (FL-SL): ${classify(flSlCm)}`);
-    log(`Right Channel (FR-SR): ${classify(frSrCm)}`);
-    log(`Center-Front Symmetry (C to FL/FR): ${classify(Math.abs(cFrontSymmetryCm))}`);
-    log(`Center-Surround Symmetry (C to SL/SR): ${classify(Math.abs(cSurroundSymmetryCm))}`);
-    if(p['L+R']) log(`L+R Verification: ${classify(lPlusRCm)}`);
-    log('Subwoofer: Informational');
+    for(const name of REQUIRED){
+      if(!irAnalysis[name]) continue;
+      const ir = irAnalysis[name];
 
-    log('\nAnalysis complete.');
+      log(`\n${name} - Impulse Response Metrics`);
+      log('-'.repeat(name.length + 25));
+      log(`Peak Value: ${ir.peakVal.toFixed(6)}`);
+      log(`Pre-Cursor Energy (before peak): ${ir.preEnergy.toFixed(6)}`);
+      log(`Post-Cursor Energy (after peak): ${ir.postEnergy.toFixed(6)}`);
+      log(`Pre/Post Ratio: ${ir.prePostRatio.toFixed(4)}`);
+      log(`Crest Factor: ${ir.crestFactor.toFixed(2)}`);
+      
+      if(ir.firstReflectionIdx >= 0){
+        log(`First Reflection Time: ${ir.firstReflectionTime.toFixed(2)} ms after peak`);
+      } else {
+        log(`First Reflection: Not detected within analysis window`);
+      }
+      
+      log(`Decay Energy (0-100ms window): ${ir.decayEnergy.toFixed(6)}`);
+      log(`Total IR Data Points: ${ir.dataLength}`);
+    }
+
+    // DECAY SYMMETRY ANALYSIS
+    log('\n\n========== DECAY SYMMETRY ANALYSIS ==========\n');
+
+    const irNames = ['FL', 'FR', 'SL', 'SR'];
+    const validIR = irNames.filter(n => irAnalysis[n]);
+
+    if(validIR.length === 2){
+      const [name1, name2] = validIR;
+      const ir1 = irAnalysis[name1];
+      const ir2 = irAnalysis[name2];
+
+      log(`${name1} vs ${name2} Decay Comparison`);
+      log('-'.repeat(30));
+      log(`${name1} Post Energy: ${ir1.postEnergy.toFixed(6)}`);
+      log(`${name2} Post Energy: ${ir2.postEnergy.toFixed(6)}`);
+      const postEnergyRatio = Math.abs(ir1.postEnergy - ir2.postEnergy) / Math.max(ir1.postEnergy, ir2.postEnergy);
+      log(`Energy Difference: ${(postEnergyRatio * 100).toFixed(2)}%`);
+
+      log(`${name1} Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
+      log(`${name2} Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
+      const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / Math.max(ir1.crestFactor, ir2.crestFactor);
+      log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
+    }
+
+    // BOUNDARY REFLECTION ANALYSIS
+    log('\n\n========== BOUNDARY REFLECTION ANALYSIS ==========\n');
+
+    for(const name of REQUIRED){
+      if(!irAnalysis[name]) continue;
+      const ir = irAnalysis[name];
+
+      log(`\n${name} - First Reflection Timing`);
+      log('-'.repeat(name.length + 22));
+      if(ir.firstReflectionIdx >= 0){
+        log(`Time to First Reflection: ${ir.firstReflectionTime.toFixed(2)} ms`);
+        if(ir.firstReflectionTime < 5) log(`  ⚠ Early reflection (< 5ms) - speaker may be very close to boundary`);
+        else if(ir.firstReflectionTime < 10) log(`  Early reflection (5-10ms) - speaker proximity to boundary`);
+        else if(ir.firstReflectionTime < 20) log(`  Normal reflection timing (10-20ms)`);
+        else log(`  Late reflection (> 20ms) - speaker far from immediate boundaries`);
+      } else {
+        log(`First reflection not detected`);
+      }
+      
+      log(`Pre-Cursor Energy Ratio: ${(ir.preEnergy / (ir.preEnergy + ir.postEnergy) * 100).toFixed(2)}%`);
+      if(ir.preEnergy / (ir.preEnergy + ir.postEnergy) > 0.1){
+        log(`  ⚠ Significant pre-cursor energy detected`);
+      }
+    }
+
+    log('\n\nAnalysis complete.');
   } catch(e){
     log('ERROR: ' + e);
   }
