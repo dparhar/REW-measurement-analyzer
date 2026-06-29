@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer v2.4</title>
+<title>Speaker Placement Analyzer v2.5</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
 button{padding:10px 16px}
@@ -10,7 +10,7 @@ pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000
 </style>
 </head>
 <body>
-<h1>Speaker Placement Analyzer v2.4</h1>
+<h1>Speaker Placement Analyzer v2.5</h1>
 <p>Required names: <b>FL, C, FR, SL, SR, SUB</b></p>
 <button id="runBtn">Run Analysis</button>
 <pre id="out">PAGE LOADED
@@ -18,7 +18,7 @@ pre{background:#111;color:#eee;padding:12px;white-space:pre-wrap;max-height:1000
 <script>
 const CM_PER_MS = 34.3;
 const REQUIRED = ['FL','C','FR','SL','SR','SUB'];
-const TH = { excellent:1, good:3, attention:5 };
+const TH = { excellent:1, good:3, attention:5, critical:20 };
 const out = document.getElementById('out');
 
 function log(x=''){ out.textContent += x + '\n'; }
@@ -28,22 +28,24 @@ function classify(cm){
   if(a<TH.excellent) return 'Excellent';
   if(a<TH.good) return 'Good';
   if(a<TH.attention) return 'Needs Attention';
-  return 'Investigate';
+  if(a<TH.critical) return 'Investigate';
+  return 'Critical';
 }
 
-function recommend(cm,a,b){
+function recommend(cm,aName,bName){
   const d=Math.abs(cm);
-  if(d<TH.excellent) return 'No changes needed.';
-  if(d>20) return 'Large discrepancy detected. Investigate placement, DSP, delays, or measurement conditions before moving speakers.';
-  if(cm>0) return `${b} arrives later. Move ${b} about ${d.toFixed(1)} cm closer, or move ${a} farther away.`;
-  return `${a} arrives later. Move ${a} about ${d.toFixed(1)} cm closer, or move ${b} farther away.`;
+  if(d<TH.excellent) return `No changes needed (${aName} and ${bName} aligned).`;
+  if(d>=TH.critical) return `Large discrepancy detected (${aName} vs ${bName}): ${d.toFixed(1)} cm difference. Investigate placement, DSP, delays, or measurement conditions.`;
+  if(cm>0) return `${bName} arrives later than ${aName} by ${d.toFixed(1)} cm. Move ${bName} closer or ${aName} farther.`;
+  return `${aName} arrives later than ${bName} by ${d.toFixed(1)} cm. Move ${aName} closer or ${bName} farther.`;
 }
 
-function centerRecommendation(cm){
+function centerRecommendation(cm,flFrDiff){
   const d=Math.abs(cm);
-  if(d<1) return 'Center alignment looks excellent.';
-  if(d<5) return 'Small center timing mismatch detected. Verify placement.';
-  return 'Large discrepancy detected. Investigate DSP, delays, crossover settings, or measurement conditions before moving the center speaker.';
+  if(d<1) return `Center aligned perfectly to front stage midpoint.`;
+  if(d<5) return `Center timing offset from front midpoint: ${d.toFixed(1)} cm.`;
+  if(d>=TH.critical) return `Large center offset: ${d.toFixed(1)} cm. Front stage discrepancy is ${flFrDiff.toFixed(1)} cm. Investigate DSP, delays, crossover settings, or measurement conditions.`;
+  return `Center offset from front midpoint: ${d.toFixed(1)} cm. (Front stage discrepancy: ${flFrDiff.toFixed(1)} cm)`;
 }
 
 async function run(){
@@ -73,16 +75,11 @@ async function run(){
     const p = {};
     REQUIRED.forEach(n => p[n] = m[n].timeOfIRPeakSeconds);
 
-    const actions = [];
-    function addAction(msg){
-      if(msg !== 'No changes needed.' && !actions.includes(msg)) actions.push(msg);
-    }
-
-    function section(title,aName,a,bName,b,isCenter=false){
+    function section(title,aName,a,bName,b,isCenter=false,extraInfo=''){
       const ms = (b-a)*1000;
       const cm = ms*CM_PER_MS;
       const st = classify(cm);
-      const rec = isCenter ? centerRecommendation(cm) : recommend(cm,aName,bName);
+      const rec = isCenter ? centerRecommendation(cm,extraInfo) : recommend(cm,aName,bName);
 
       log('\n' + title);
       log('-'.repeat(title.length));
@@ -92,13 +89,17 @@ async function run(){
       log('Status: ' + st);
       log('Recommendation: ' + rec);
 
-      addAction(rec);
-      return st;
+      return { st, rec };
     }
 
-    const frontStatus = section('Front Stage','FL',p.FL,'FR',p.FR);
-    const centerStatus = section('Center Alignment','Front Midpoint',(p.FL+p.FR)/2,'Center',p.C,true);
-    const surroundStatus = section('Surrounds','SL',p.SL,'SR',p.SR);
+    const flFrMs = (p.FR - p.FL) * 1000;
+    const flFrCm = flFrMs * CM_PER_MS;
+    const frontResult = section('Front Stage','FL',p.FL,'FR',p.FR);
+
+    const centerFrontMidpoint = (p.FL+p.FR)/2;
+    const centerResult = section('Center Alignment','Front Midpoint',centerFrontMidpoint,'Center',p.C,true,Math.abs(flFrCm));
+
+    const surroundResult = section('Surrounds','SL',p.SL,'SR',p.SR);
 
     const leftOffsetMs = (p.SL - p.FL) * 1000;
     const rightOffsetMs = (p.SR - p.FR) * 1000;
@@ -107,11 +108,11 @@ async function run(){
 
     log('\nLeft Side');
     log('---------');
-    log(`FL to SL offset: ${leftOffsetMs.toFixed(3)} ms`);
+    log(`FL to SL offset: ${leftOffsetMs.toFixed(3)} ms (${(leftOffsetMs*CM_PER_MS).toFixed(2)} cm)`);
 
     log('\nRight Side');
     log('----------');
-    log(`FR to SR offset: ${rightOffsetMs.toFixed(3)} ms`);
+    log(`FR to SR offset: ${rightOffsetMs.toFixed(3)} ms (${(rightOffsetMs*CM_PER_MS).toFixed(2)} cm)`);
 
     log('\nSide Symmetry');
     log('-------------');
@@ -122,21 +123,15 @@ async function run(){
     log('----------');
     log(`SUB arrival: ${(p.SUB*1000).toFixed(3)} ms`);
     log('Status: Informational');
-    log('Recommendation: Sub integration analysis will be added in a future version.');
+    log('Recommendation: Sub timing relative to mains and LFE crossover frequency - future version.');
 
     log('\nSYSTEM SUMMARY');
     log('==============');
-    log(`Front Stage: ${frontStatus}`);
-    log(`Center: ${centerStatus}`);
-    log(`Surrounds: ${surroundStatus}`);
+    log(`Front Stage: ${frontResult.st}`);
+    log(`Center: ${centerResult.st}`);
+    log(`Surrounds: ${surroundResult.st}`);
+    log(`Side Symmetry: ${classify(sideDifferenceCm)}`);
     log('Subwoofer: Informational');
-
-    log('\nRecommended actions:');
-    if(actions.length === 0){
-      log('1. No changes required.');
-    } else {
-      actions.forEach((a,i)=>log(`${i+1}. ${a}`));
-    }
 
     log('\nAnalysis complete.');
   } catch(e){
