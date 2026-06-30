@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer v3.0</title>
+<title>Speaker Placement Analyzer</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
 button{padding:10px 16px;margin-right:10px}
@@ -76,17 +76,53 @@ function analyzeIR(irData, sampleRate){
   const rms = Math.sqrt(totalEnergy / data.length);
   const crestFactor = rms > 0 ? peakVal / rms : 0;
   
-  // First reflection (find first significant peak after main peak, within 50ms)
-  const maxSearchSamples = Math.floor((sampleRate / 1000) * 50); // 50ms
-  const maxSearchIdx = Math.min(peakIdx + maxSearchSamples, data.length);
-  let firstReflectionIdx = -1;
-  let reflectionThreshold = peakVal * 0.05; // 5% of peak
-  for(let i = peakIdx + 10; i < maxSearchIdx; i++){
-    if(Math.abs(data[i]) > reflectionThreshold){
-      firstReflectionIdx = i;
-      break;
+  // First significant event (search from 1ms to 20ms after direct arrival)
+  const minReflectionDelayMs = 1.0;
+  const maxReflectionDelayMs = 20.0;
+
+  const startIdx = peakIdx + Math.floor(sampleRate * minReflectionDelayMs / 1000);
+  const maxSearchIdx = Math.min(
+    peakIdx + Math.floor(sampleRate * maxReflectionDelayMs / 1000),
+    data.length
+  );
+
+  const eventThresholdDb = -20;
+  const eventThreshold = peakVal * Math.pow(10, eventThresholdDb / 20);
+
+  let firstEventIdx = -1;
+  let firstEventAmplitude = 0;
+  let strongestEventIdx = -1;
+  let strongestEventAmplitude = 0;
+
+  for(let i = startIdx + 1; i < maxSearchIdx - 1; i++){
+    const prev = Math.abs(data[i - 1]);
+    const curr = Math.abs(data[i]);
+    const next = Math.abs(data[i + 1]);
+
+    const isLocalMaximum = curr > prev && curr > next;
+
+    if(isLocalMaximum && curr > eventThreshold){
+      if(firstEventIdx < 0){
+        firstEventIdx = i;
+        firstEventAmplitude = curr;
+      }
+
+      if(curr > strongestEventAmplitude){
+        strongestEventIdx = i;
+        strongestEventAmplitude = curr;
+      }
     }
   }
+
+  const firstEventLevelDb =
+    firstEventAmplitude > 0
+      ? 20 * Math.log10(firstEventAmplitude / peakVal)
+      : null;
+
+  const strongestEventLevelDb =
+    strongestEventAmplitude > 0
+      ? 20 * Math.log10(strongestEventAmplitude / peakVal)
+      : null;
   
   // Energy decay calculation
   const decayStart = peakIdx;
@@ -107,8 +143,12 @@ function analyzeIR(irData, sampleRate){
     postEnergy,
     crestFactor,
     prePostRatio: totalPrePost > 0 ? postEnergy / totalPrePost : 0,
-    firstReflectionIdx,
-    firstReflectionTime: firstReflectionIdx >= 0 ? (firstReflectionIdx - peakIdx) / sampleRate * 1000 : -1,
+    firstEventIdx,
+    firstEventTime: firstEventIdx >= 0 ? (firstEventIdx - peakIdx) / sampleRate * 1000 : -1,
+    firstEventLevelDb,
+    strongestEventIdx,
+    strongestEventTime: strongestEventIdx >= 0 ? (strongestEventIdx - peakIdx) / sampleRate * 1000 : -1,
+    strongestEventLevelDb,
     decayEnergy,
     dataLength: data.length
   };
@@ -279,10 +319,10 @@ async function run(){
       log(`Pre/Post Energy Ratio: ${ir.prePostRatio.toFixed(4)}`);
       log(`Crest Factor: ${ir.crestFactor.toFixed(2)}`);
       
-      if(ir.firstReflectionIdx >= 0){
-        log(`First Reflection Time: ${ir.firstReflectionTime.toFixed(2)} ms after peak`);
+      if(ir.firstEventIdx >= 0){
+        log(`First Event After Direct Sound: ${ir.firstEventTime.toFixed(2)} ms after peak`);
       } else {
-        log(`First Reflection: Not detected within analysis window`);
+        log(`First Event After Direct Sound: Not detected within analysis window`);
       }
       
       log(`Decay Energy (0-100ms window): ${ir.decayEnergy.toFixed(6)}`);
@@ -342,36 +382,86 @@ async function run(){
       }
     }
 
-    // BOUNDARY REFLECTION ANALYSIS
-    log('\n\n========== BOUNDARY REFLECTION ANALYSIS ==========\n');
+    // EARLY SOUND ANALYSIS
+    log('\n\n========== EARLY SOUND ANALYSIS ==========\n');
+    log('What is this?');
+    log('The direct sound from a speaker reaches your seat first.');
+    log('A short time later, sound bounces off walls, the floor, the ceiling, and furniture.');
+    log('We measure the first reflection that arrives after the direct sound.');
+    log('');
+    log('Why does it matter?');
+    log('These early sound bounces can affect dialogue clarity, sound placement, and immersion in movies and games.');
 
-    for(const name of REQUIRED){
-      if(!irAnalysis[name]) continue;
-      const ir = irAnalysis[name];
 
-      log(`\n${name} - First Reflection Timing`);
-      log('-'.repeat(name.length + 22));
-      if(ir.firstReflectionIdx >= 0){
-        log(`Time to First Reflection: ${ir.firstReflectionTime.toFixed(2)} ms`);
-        if(ir.firstReflectionTime < 5) log(`  ⚠ Early reflection (< 5ms) - speaker may be very close to boundary`);
-        else if(ir.firstReflectionTime < 10) log(`  Early reflection (5-10ms) - speaker proximity to boundary`);
-        else if(ir.firstReflectionTime < 20) log(`  Normal reflection timing (10-20ms)`);
-        else log(`  Late reflection (> 20ms) - speaker far from immediate boundaries`);
-      } else {
-        log(`First reflection not detected`);
-      }
-      
-      const prePostTotal = ir.preEnergy + ir.postEnergy;
-      if(prePostTotal > 0){
-        const preCursorPercent = ir.preEnergy / prePostTotal * 100;
-        log(`Pre-Cursor Energy Ratio: ${preCursorPercent.toFixed(2)}%`);
-        if(preCursorPercent > 10){
-          log(`  ⚠ Significant pre-cursor energy detected`);
+    function compareEarlyEvents(a, b, label){
+      if(!irAnalysis[a] || !irAnalysis[b]) return;
+
+      const irA = irAnalysis[a];
+      const irB = irAnalysis[b];
+
+      log(`
+${label}`);
+      log('-'.repeat(label.length));
+
+      log(`${a}:`);
+      if(irA.firstEventIdx >= 0 && irA.firstEventLevelDb !== null){
+        log(`  First reflection after direct sound: ${irA.firstEventTime.toFixed(2)} ms`);
+        log(`  Loudness: ${Math.abs(irA.firstEventLevelDb).toFixed(2)} dB lower than the direct sound`);
+        if(irA.strongestEventIdx >= 0 && irA.strongestEventLevelDb !== null){
+          log(`  Strongest reflection: ${irA.strongestEventTime.toFixed(2)} ms`);
+          log(`  Loudness: ${Math.abs(irA.strongestEventLevelDb).toFixed(2)} dB lower than the direct sound`);
         }
+        log('');
+        log('  In simple terms:');
+        log(`  The first reflection that the microphone picked up happened ${irA.firstEventTime.toFixed(2)} ms after the initial sweep, and it was ${Math.abs(irA.firstEventLevelDb).toFixed(2)} dB lower than the original sound.`);
+      } else {
+        log('  First reflection after direct sound: not detected');
+      }
+
+      log('');
+      log(`${b}:`);
+      if(irB.firstEventIdx >= 0 && irB.firstEventLevelDb !== null){
+        log(`  First reflection after direct sound: ${irB.firstEventTime.toFixed(2)} ms`);
+        log(`  Loudness: ${Math.abs(irB.firstEventLevelDb).toFixed(2)} dB lower than the direct sound`);
+        if(irB.strongestEventIdx >= 0 && irB.strongestEventLevelDb !== null){
+          log(`  Strongest reflection: ${irB.strongestEventTime.toFixed(2)} ms`);
+          log(`  Loudness: ${Math.abs(irB.strongestEventLevelDb).toFixed(2)} dB lower than the direct sound`);
+        }
+        log('');
+        log('  In simple terms:');
+        log(`  The first reflection that the microphone picked up happened ${irB.firstEventTime.toFixed(2)} ms after the initial sweep, and it was ${Math.abs(irB.firstEventLevelDb).toFixed(2)} dB lower than the original sound.`);
+      } else {
+        log('  First reflection after direct sound: not detected');
+      }
+
+      if(irA.firstEventIdx >= 0 && irB.firstEventIdx >= 0 && irA.firstEventLevelDb !== null && irB.firstEventLevelDb !== null){
+        const timeDiff = Math.abs(irA.firstEventTime - irB.firstEventTime);
+        const levelDiff = Math.abs(irA.firstEventLevelDb - irB.firstEventLevelDb);
+
+        log('');
+        log('Left vs Right:');
+        log(`  Time difference: ${timeDiff.toFixed(2)} ms`);
+        log(`  Loudness difference: ${levelDiff.toFixed(2)} dB`);
+        log('');
+        log('Reflection Similarity:');
+
+        if(timeDiff < 1 && levelDiff < 3){
+          log('  The left and right speakers have very similar early reflections.');
+        } else {
+          log('  The left and right speakers are hearing the room differently.');
+        }
+
+        log('');
+        log('  Why compare left and right?');
+        log('  Similar reflections can help sounds move smoothly across the room and keep voices centered on screen.');
       }
     }
 
+    compareEarlyEvents('FL', 'FR', 'Front Pair');
+    compareEarlyEvents('SL', 'SR', 'Surround Pair');
+
     log('\n\nAnalysis complete.');
+
   } catch(e){
     log('ERROR: ' + e);
   }
