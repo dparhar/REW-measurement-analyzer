@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Speaker Placement Analyzer</title>
+<title>Speaker Placement Analyzer v3.0</title>
 <style>
 body{font-family:Arial,sans-serif;margin:20px}
 button{padding:10px 16px;margin-right:10px}
@@ -79,6 +79,7 @@ function analyzeIR(irData, sampleRate){
   // First significant event (search from 1ms to 20ms after direct arrival)
   const minReflectionDelayMs = 1.0;
   const maxReflectionDelayMs = 20.0;
+  const minEventSpacingMs = 0.5;
 
   const startIdx = peakIdx + Math.floor(sampleRate * minReflectionDelayMs / 1000);
   const maxSearchIdx = Math.min(
@@ -86,26 +87,45 @@ function analyzeIR(irData, sampleRate){
     data.length
   );
 
-  const eventThresholdDb = -20;
+  const eventThresholdDb = -30;
   const eventThreshold = peakVal * Math.pow(10, eventThresholdDb / 20);
 
   let firstEventIdx = -1;
   let firstEventAmplitude = 0;
   let strongestEventIdx = -1;
   let strongestEventAmplitude = 0;
+  let eventCount = 0;
+  let events = [];
+  let lastAcceptedEventIdx = -Infinity;
 
   for(let i = startIdx + 1; i < maxSearchIdx - 1; i++){
     const prev = Math.abs(data[i - 1]);
     const curr = Math.abs(data[i]);
     const next = Math.abs(data[i + 1]);
 
-    const isLocalMaximum = curr > prev && curr > next;
+    const neighborhoodMax = Math.max(
+      Math.abs(data[i - 2] || 0),
+      prev,
+      next,
+      Math.abs(data[i + 2] || 0)
+    );
+
+    const isLocalMaximum = curr > neighborhoodMax;
+
+    const minSpacingSamples = sampleRate * minEventSpacingMs / 1000;
 
     if(isLocalMaximum && curr > eventThreshold){
+      if(i - lastAcceptedEventIdx < minSpacingSamples) continue;
+      lastAcceptedEventIdx = i;
+      eventCount++;
       if(firstEventIdx < 0){
         firstEventIdx = i;
         firstEventAmplitude = curr;
       }
+
+      const eventTime = (i - peakIdx) / sampleRate * 1000;
+      const eventLevelDb = 20 * Math.log10(curr / peakVal);
+      events.push({time:eventTime, levelDb:eventLevelDb, polarity:data[i] >= 0 ? '+' : '-', linearAmplitude: curr / peakVal});
 
       if(curr > strongestEventAmplitude){
         strongestEventIdx = i;
@@ -136,6 +156,17 @@ function analyzeIR(irData, sampleRate){
   
   const totalPrePost = preEnergy + postEnergy;
   
+  events.sort((a,b)=>a.time-b.time);
+
+  let totalReflectionEnergy = 0;
+  for(const e of events){
+    totalReflectionEnergy += e.linearAmplitude * e.linearAmplitude;
+  }
+
+  const totalReflectionLevelDb = totalReflectionEnergy > 0
+    ? 20 * Math.log10(Math.sqrt(totalReflectionEnergy))
+    : null;
+
   return {
     peakIdx,
     peakVal,
@@ -149,6 +180,9 @@ function analyzeIR(irData, sampleRate){
     strongestEventIdx,
     strongestEventTime: strongestEventIdx >= 0 ? (strongestEventIdx - peakIdx) / sampleRate * 1000 : -1,
     strongestEventLevelDb,
+    events,
+    eventCount,
+    totalReflectionLevelDb,
     decayEnergy,
     dataLength: data.length
   };
@@ -314,10 +348,6 @@ async function run(){
       log(`\n${name} - Impulse Response Metrics`);
       log('-'.repeat(name.length + 25));
       log(`Peak Value: ${ir.peakVal.toFixed(6)}`);
-      log(`Pre-Cursor Energy (before peak): ${ir.preEnergy.toFixed(6)}`);
-      log(`Post-Cursor Energy (after peak): ${ir.postEnergy.toFixed(6)}`);
-      log(`Pre/Post Energy Ratio: ${ir.prePostRatio.toFixed(4)}`);
-      log(`Crest Factor: ${ir.crestFactor.toFixed(2)}`);
       
       if(ir.firstEventIdx >= 0){
         log(`First Event After Direct Sound: ${ir.firstEventTime.toFixed(2)} ms after peak`);
@@ -325,64 +355,69 @@ async function run(){
         log(`First Event After Direct Sound: Not detected within analysis window`);
       }
       
+      log(`Reflection Count (1-20ms window): ${ir.eventCount}`);
       log(`Decay Energy (0-100ms window): ${ir.decayEnergy.toFixed(6)}`);
       log(`Total IR Data Points: ${ir.dataLength}`);
     }
 
-    // DECAY SYMMETRY ANALYSIS
-    log('\n\n========== DECAY SYMMETRY ANALYSIS ==========\n');
+    // REFLECTION SYMMETRY ANALYSIS
+    log('
 
-    // Front pair comparison
-    if(irAnalysis['FL'] && irAnalysis['FR']){
-      const ir1 = irAnalysis['FL'];
-      const ir2 = irAnalysis['FR'];
+========== EARLY REFLECTION ANALYSIS ==========
+');
 
-      log(`\nFront Pair (FL vs FR) Decay Comparison`);
-      log('-'.repeat(38));
-      log(`FL Post Energy: ${ir1.postEnergy.toFixed(6)}`);
-      log(`FR Post Energy: ${ir2.postEnergy.toFixed(6)}`);
-      
-      const maxPostEnergy = Math.max(ir1.postEnergy, ir2.postEnergy);
-      if(maxPostEnergy > 0){
-        const postEnergyDiff = Math.abs(ir1.postEnergy - ir2.postEnergy) / maxPostEnergy;
-        log(`Energy Difference: ${(postEnergyDiff * 100).toFixed(2)}%`);
+    function dumpPair(a,b,label){
+      if(!irAnalysis[a] || !irAnalysis[b]) return;
+      const irA=irAnalysis[a];
+      const irB=irAnalysis[b];
+
+      log(`
+${label}`);
+      log('-'.repeat(label.length));
+
+      for(const [name,ir] of [[a,irA],[b,irB]]){
+        log(`
+${name} Reflections (1-20 ms)`);
+        log('-'.repeat(name.length + 22));
+        if(ir.events.length===0){
+          log('No reflections detected.');
+          continue;
+        }
+        ir.events.forEach((e,idx)=>{
+          log(`${idx+1}. ${e.time.toFixed(2)} ms @ ${e.levelDb.toFixed(2)} dB`);
+        });
+
+        log('');
+        log(`First Reflection: ${ir.firstEventTime.toFixed(2)} ms @ ${ir.firstEventLevelDb.toFixed(2)} dB`);
+        log(`Strongest Reflection: ${ir.strongestEventTime.toFixed(2)} ms @ ${ir.strongestEventLevelDb.toFixed(2)} dB`);
+        log(`Reflection Count: ${ir.eventCount}`);
+        if(ir.totalReflectionLevelDb !== null){
+          log(`Total Early Reflection Energy: ${ir.totalReflectionLevelDb.toFixed(2)} dB`);
+        }
       }
 
-      log(`FL Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
-      log(`FR Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
-      const maxCrest = Math.max(ir1.crestFactor, ir2.crestFactor);
-      if(maxCrest > 0){
-        const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / maxCrest;
-        log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
+      if(irA.firstEventIdx>=0 && irB.firstEventIdx>=0){
+        log('
+First Reflection Pair Difference');
+        log(`Time Difference: ${Math.abs(irA.firstEventTime-irB.firstEventTime).toFixed(2)} ms`);
+        log(`Level Difference: ${Math.abs(irA.firstEventLevelDb-irB.firstEventLevelDb).toFixed(2)} dB`);
       }
+
+      if(irA.strongestEventIdx>=0 && irB.strongestEventIdx>=0){
+        log('
+Strongest Reflection Pair Difference');
+        log(`Time Difference: ${Math.abs(irA.strongestEventTime-irB.strongestEventTime).toFixed(2)} ms`);
+        log(`Level Difference: ${Math.abs(irA.strongestEventLevelDb-irB.strongestEventLevelDb).toFixed(2)} dB`);
+      }
+
+      log(`
+Reflection Count Difference: ${Math.abs(irA.eventCount-irB.eventCount)}`);
     }
 
-    // Surround pair comparison
-    if(irAnalysis['SL'] && irAnalysis['SR']){
-      const ir1 = irAnalysis['SL'];
-      const ir2 = irAnalysis['SR'];
+    dumpPair('FL','FR','Front Pair Differences');
+    dumpPair('SL','SR','Surround Pair Differences');
 
-      log(`\nSurround Pair (SL vs SR) Decay Comparison`);
-      log('-'.repeat(40));
-      log(`SL Post Energy: ${ir1.postEnergy.toFixed(6)}`);
-      log(`SR Post Energy: ${ir2.postEnergy.toFixed(6)}`);
-      
-      const maxPostEnergy = Math.max(ir1.postEnergy, ir2.postEnergy);
-      if(maxPostEnergy > 0){
-        const postEnergyDiff = Math.abs(ir1.postEnergy - ir2.postEnergy) / maxPostEnergy;
-        log(`Energy Difference: ${(postEnergyDiff * 100).toFixed(2)}%`);
-      }
-
-      log(`SL Crest Factor: ${ir1.crestFactor.toFixed(2)}`);
-      log(`SR Crest Factor: ${ir2.crestFactor.toFixed(2)}`);
-      const maxCrest = Math.max(ir1.crestFactor, ir2.crestFactor);
-      if(maxCrest > 0){
-        const crestDiff = Math.abs(ir1.crestFactor - ir2.crestFactor) / maxCrest;
-        log(`Crest Factor Difference: ${(crestDiff * 100).toFixed(2)}%`);
-      }
-    }
-
-    // EARLY SOUND ANALYSIS
+// EARLY SOUND ANALYSIS
     log('\n\n========== EARLY SOUND ANALYSIS ==========\n');
     log('What is this?');
     log('The direct sound from a speaker reaches your seat first.');
